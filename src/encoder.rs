@@ -1,4 +1,4 @@
-use crate::bitbuffer::BitBuffer;
+use crate::bitbuffer::{BitBuffer, BufferFull};
 
 /// A single time-series data point: a Unix timestamp (seconds) and an f64 value.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -25,10 +25,10 @@ impl DataPoint {
 /// use gorilla::{Encoder, DataPoint};
 ///
 /// let mut encoder = Encoder::new();
-/// encoder.encode(DataPoint::new(1609459200, 12.0));
-/// encoder.encode(DataPoint::new(1609459260, 12.5));
-/// encoder.encode(DataPoint::new(1609459320, 13.0));
-/// encoder.finish();
+/// encoder.encode(DataPoint::new(1609459200, 12.0)).unwrap();
+/// encoder.encode(DataPoint::new(1609459260, 12.5)).unwrap();
+/// encoder.encode(DataPoint::new(1609459320, 13.0)).unwrap();
+/// encoder.finish().unwrap();
 ///
 /// let compressed = encoder.into_compressed();
 /// ```
@@ -65,36 +65,56 @@ impl Encoder {
         }
     }
 
+    /// Creates a new `Encoder` whose internal buffer will not grow beyond
+    /// `max_bytes` bytes. Once the limit is reached, `encode()` will return
+    /// `Err(BufferFull)`.
+    pub fn with_limit(max_bytes: usize) -> Self {
+        Self {
+            buf: BitBuffer::with_limit(max_bytes),
+            count: 0,
+            prev_timestamp: 0,
+            prev_delta: 0,
+            prev_value_bits: 0,
+            prev_leading_zeros: 64,
+            prev_trailing_zeros: 64,
+            finished: false,
+        }
+    }
+
     /// Encodes a data point into the compressed stream.
     ///
     /// Data points should be appended in strictly increasing timestamp order.
-    pub fn encode(&mut self, dp: DataPoint) {
+    ///
+    /// Returns `Err(BufferFull)` if the buffer's byte limit would be exceeded.
+    /// On error the encoder may be in a partially-written state; use
+    /// `into_compressed()` to recover the data encoded so far.
+    pub fn encode(&mut self, dp: DataPoint) -> Result<(), BufferFull> {
         assert!(!self.finished, "cannot encode after finish()");
 
         if self.count == 0 {
-            self.encode_first(dp);
+            self.encode_first(dp)?;
         } else if self.count == 1 {
-            self.encode_second(dp);
+            self.encode_second(dp)?;
         } else {
-            self.encode_subsequent(dp);
+            self.encode_subsequent(dp)?;
         }
 
         self.count += 1;
+        Ok(())
     }
 
     /// Writes the end-of-stream marker. Must be called after all data points
     /// have been encoded.
-    pub fn finish(&mut self) {
+    ///
+    /// Returns `Err(BufferFull)` if the buffer cannot fit the marker.
+    pub fn finish(&mut self) -> Result<(), BufferFull> {
         if self.finished {
-            return;
+            return Ok(());
         }
-        // End-of-stream marker: a delta-of-delta that doesn't fit in any bucket.
-        // We use 0x0FFF_FFFF_FFFF_FFFF (all ones in the 64-bit bucket) as sentinel.
-        // Write the '1111' prefix for the ≥2048 bucket and then 64 bits of zeros
-        // (which indicates "no more data" when decoded).
-        self.buf.write_bits(0b1111, 4);
-        self.buf.write_bits(0xFFFF_FFFF_FFFF_FFFF, 64);
+        self.buf.write_bits(0b1111, 4)?;
+        self.buf.write_bits(0xFFFF_FFFF_FFFF_FFFF, 64)?;
         self.finished = true;
+        Ok(())
     }
 
     /// Returns a reference to the underlying `BitBuffer`.
@@ -123,37 +143,37 @@ impl Encoder {
 
     // ── internal helpers ───────────────────────────────────────────────
 
-    fn encode_first(&mut self, dp: DataPoint) {
-        // Store the first timestamp as a full 64-bit value.
-        self.buf.write_bits(dp.timestamp, 64);
-        // Store the first value as raw 64 bits.
+    fn encode_first(&mut self, dp: DataPoint) -> Result<(), BufferFull> {
+        self.buf.write_bits(dp.timestamp, 64)?;
         let bits = dp.value.to_bits();
-        self.buf.write_bits(bits, 64);
+        self.buf.write_bits(bits, 64)?;
 
         self.prev_timestamp = dp.timestamp;
         self.prev_value_bits = bits;
+        Ok(())
     }
 
-    fn encode_second(&mut self, dp: DataPoint) {
+    fn encode_second(&mut self, dp: DataPoint) -> Result<(), BufferFull> {
         let delta = dp.timestamp as i64 - self.prev_timestamp as i64;
-        // First delta is stored as a 14-bit signed value (enough for typical intervals).
-        self.encode_delta_of_delta(delta);
+        self.encode_delta_of_delta(delta)?;
 
-        self.encode_value(dp.value);
+        self.encode_value(dp.value)?;
 
         self.prev_delta = delta;
         self.prev_timestamp = dp.timestamp;
+        Ok(())
     }
 
-    fn encode_subsequent(&mut self, dp: DataPoint) {
+    fn encode_subsequent(&mut self, dp: DataPoint) -> Result<(), BufferFull> {
         let delta = dp.timestamp as i64 - self.prev_timestamp as i64;
         let dod = delta - self.prev_delta;
-        self.encode_delta_of_delta(dod);
+        self.encode_delta_of_delta(dod)?;
 
-        self.encode_value(dp.value);
+        self.encode_value(dp.value)?;
 
         self.prev_delta = delta;
         self.prev_timestamp = dp.timestamp;
+        Ok(())
     }
 
     /// Encodes a delta-of-delta value using the Gorilla variable-length scheme:
@@ -163,23 +183,23 @@ impl Encoder {
     /// | [-255, 256]    | `110` + 9-bit value            | 12 bits |
     /// | [-2047, 2048]  | `1110` + 12-bit value          | 16 bits |
     /// | otherwise      | `1111` + 64-bit value          | 68 bits |
-    fn encode_delta_of_delta(&mut self, dod: i64) {
+    fn encode_delta_of_delta(&mut self, dod: i64) -> Result<(), BufferFull> {
         if dod == 0 {
-            self.buf.write_bit(false); // '0'
+            self.buf.write_bit(false)?;
         } else if dod >= -63 && dod <= 64 {
-            self.buf.write_bits(0b10, 2); // '10'
-            // 7-bit value (zigzag-style: store as unsigned)
-            self.buf.write_bits((dod as u64) & 0x7F, 7);
+            self.buf.write_bits(0b10, 2)?;
+            self.buf.write_bits((dod as u64) & 0x7F, 7)?;
         } else if dod >= -255 && dod <= 256 {
-            self.buf.write_bits(0b110, 3); // '110'
-            self.buf.write_bits((dod as u64) & 0x1FF, 9);
+            self.buf.write_bits(0b110, 3)?;
+            self.buf.write_bits((dod as u64) & 0x1FF, 9)?;
         } else if dod >= -2047 && dod <= 2048 {
-            self.buf.write_bits(0b1110, 4); // '1110'
-            self.buf.write_bits((dod as u64) & 0xFFF, 12);
+            self.buf.write_bits(0b1110, 4)?;
+            self.buf.write_bits((dod as u64) & 0xFFF, 12)?;
         } else {
-            self.buf.write_bits(0b1111, 4); // '1111'
-            self.buf.write_bits(dod as u64, 64);
+            self.buf.write_bits(0b1111, 4)?;
+            self.buf.write_bits(dod as u64, 64)?;
         }
+        Ok(())
     }
 
     /// XOR-based value compression:
@@ -191,34 +211,32 @@ impl Encoder {
     ///    b. If leading/trailing zeros fit within previous window:
     ///       write `0` + meaningful bits.  
     ///    c. Else: write `1` + 6-bit leading zeros + 6-bit meaningful length + meaningful bits.
-    fn encode_value(&mut self, value: f64) {
+    fn encode_value(&mut self, value: f64) -> Result<(), BufferFull> {
         let bits = value.to_bits();
         let xor = bits ^ self.prev_value_bits;
 
         if xor == 0 {
-            // Same value — single '0' bit.
-            self.buf.write_bit(false);
+            self.buf.write_bit(false)?;
         } else {
-            self.buf.write_bit(true); // '1' — value changed
+            self.buf.write_bit(true)?; // '1' — value changed
 
             let leading = xor.leading_zeros() as u8;
             let trailing = xor.trailing_zeros() as u8;
 
             if leading >= self.prev_leading_zeros && trailing >= self.prev_trailing_zeros {
                 // The meaningful bits fit within the previous window.
-                self.buf.write_bit(false); // '0' — reuse window
+                self.buf.write_bit(false)?; // '0' — reuse window
                 let meaningful_bits = 64 - self.prev_leading_zeros - self.prev_trailing_zeros;
                 let meaningful_value = (xor >> self.prev_trailing_zeros) & bitmask(meaningful_bits);
-                self.buf.write_bits(meaningful_value, meaningful_bits);
+                self.buf.write_bits(meaningful_value, meaningful_bits)?;
             } else {
                 // New window.
-                self.buf.write_bit(true); // '1' — new window
+                self.buf.write_bit(true)?; // '1' — new window
                 let meaningful_bits = 64 - leading - trailing;
-                self.buf.write_bits(leading as u64, 6);
-                // Store meaningful_bits as (length - 1) to allow encoding 64 in 6 bits.
-                self.buf.write_bits((meaningful_bits - 1) as u64, 6);
+                self.buf.write_bits(leading as u64, 6)?;
+                self.buf.write_bits((meaningful_bits - 1) as u64, 6)?;
                 let meaningful_value = (xor >> trailing) & bitmask(meaningful_bits);
-                self.buf.write_bits(meaningful_value, meaningful_bits);
+                self.buf.write_bits(meaningful_value, meaningful_bits)?;
 
                 self.prev_leading_zeros = leading;
                 self.prev_trailing_zeros = trailing;
@@ -226,6 +244,7 @@ impl Encoder {
         }
 
         self.prev_value_bits = bits;
+        Ok(())
     }
 }
 
@@ -263,8 +282,8 @@ mod tests {
     #[test]
     fn test_encode_single_point() {
         let mut enc = Encoder::new();
-        enc.encode(DataPoint::new(1609459200, 42.0));
-        enc.finish();
+        enc.encode(DataPoint::new(1609459200, 42.0)).unwrap();
+        enc.finish().unwrap();
         assert_eq!(enc.count(), 1);
         assert!(enc.buffer().len_bits() > 0);
     }
@@ -273,9 +292,9 @@ mod tests {
     fn test_encode_identical_values() {
         let mut enc = Encoder::new();
         for i in 0..10 {
-            enc.encode(DataPoint::new(1609459200 + i * 60, 42.0));
+            enc.encode(DataPoint::new(1609459200 + i * 60, 42.0)).unwrap();
         }
-        enc.finish();
+        enc.finish().unwrap();
         assert_eq!(enc.count(), 10);
         // Identical values should compress very efficiently.
     }
@@ -283,12 +302,31 @@ mod tests {
     #[test]
     fn test_encode_varying_deltas() {
         let mut enc = Encoder::new();
-        enc.encode(DataPoint::new(100, 1.0));
-        enc.encode(DataPoint::new(160, 2.0)); // delta=60
-        enc.encode(DataPoint::new(220, 3.0)); // delta=60, dod=0
-        enc.encode(DataPoint::new(290, 4.0)); // delta=70, dod=10
-        enc.encode(DataPoint::new(500, 5.0)); // delta=210, dod=140
-        enc.finish();
+        enc.encode(DataPoint::new(100, 1.0)).unwrap();
+        enc.encode(DataPoint::new(160, 2.0)).unwrap(); // delta=60
+        enc.encode(DataPoint::new(220, 3.0)).unwrap(); // delta=60, dod=0
+        enc.encode(DataPoint::new(290, 4.0)).unwrap(); // delta=70, dod=10
+        enc.encode(DataPoint::new(500, 5.0)).unwrap(); // delta=210, dod=140
+        enc.finish().unwrap();
         assert_eq!(enc.count(), 5);
+    }
+
+    #[test]
+    fn test_encode_with_limit_ok() {
+        // 256 bytes is plenty for a few points with constant values.
+        let mut enc = Encoder::with_limit(256);
+        enc.encode(DataPoint::new(1609459200, 42.0)).unwrap();
+        enc.encode(DataPoint::new(1609459260, 42.0)).unwrap();
+        enc.encode(DataPoint::new(1609459320, 42.0)).unwrap();
+        enc.finish().unwrap();
+        assert_eq!(enc.count(), 3);
+    }
+
+    #[test]
+    fn test_encode_with_limit_exceeded() {
+        // 1 byte can't even fit the first 64-bit timestamp.
+        let mut enc = Encoder::with_limit(1);
+        let result = enc.encode(DataPoint::new(1609459200, 42.0));
+        assert!(result.is_err());
     }
 }

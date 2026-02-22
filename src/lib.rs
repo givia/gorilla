@@ -24,10 +24,10 @@
 //!
 //! // Compress
 //! let mut encoder = Encoder::new();
-//! encoder.encode(DataPoint::new(1609459200, 12.0));
-//! encoder.encode(DataPoint::new(1609459260, 12.5));
-//! encoder.encode(DataPoint::new(1609459320, 13.0));
-//! encoder.finish();
+//! encoder.encode(DataPoint::new(1609459200, 12.0)).unwrap();
+//! encoder.encode(DataPoint::new(1609459260, 12.5)).unwrap();
+//! encoder.encode(DataPoint::new(1609459320, 13.0)).unwrap();
+//! encoder.finish().unwrap();
 //!
 //! let compressed = encoder.into_compressed();
 //! println!("Compressed {} points into {} bytes", compressed.count, compressed.bytes.len());
@@ -45,9 +45,9 @@
 //! ```rust
 //! # use gorilla::{Encoder, Decoder, DataPoint};
 //! # let mut encoder = Encoder::new();
-//! # encoder.encode(DataPoint::new(1609459200, 12.0));
-//! # encoder.encode(DataPoint::new(1609459260, 12.5));
-//! # encoder.finish();
+//! # encoder.encode(DataPoint::new(1609459200, 12.0)).unwrap();
+//! # encoder.encode(DataPoint::new(1609459260, 12.5)).unwrap();
+//! # encoder.finish().unwrap();
 //! # let block = encoder.into_compressed();
 //! for result in Decoder::iter(&block) {
 //!     let dp = result.unwrap();
@@ -60,5 +60,6 @@ pub mod decoder;
 pub mod encoder;
 
 // Re-export primary types at the crate root.
+pub use bitbuffer::BufferFull;
 pub use decoder::{DecodeError, Decoder, DecoderIter};
 pub use encoder::{CompressedBlock, DataPoint, Encoder};

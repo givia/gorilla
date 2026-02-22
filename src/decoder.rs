@@ -30,9 +30,9 @@ impl std::error::Error for DecodeError {}
 /// use gorilla::{Encoder, Decoder, DataPoint};
 ///
 /// let mut encoder = Encoder::new();
-/// encoder.encode(DataPoint::new(1609459200, 12.0));
-/// encoder.encode(DataPoint::new(1609459260, 12.5));
-/// encoder.finish();
+/// encoder.encode(DataPoint::new(1609459200, 12.0)).unwrap();
+/// encoder.encode(DataPoint::new(1609459260, 12.5)).unwrap();
+/// encoder.finish().unwrap();
 ///
 /// let compressed = encoder.into_compressed();
 /// let points = Decoder::decode(&compressed).unwrap();
@@ -322,9 +322,9 @@ mod tests {
 
         let mut enc = Encoder::new();
         for dp in &input {
-            enc.encode(*dp);
+            enc.encode(*dp).unwrap();
         }
-        enc.finish();
+        enc.finish().unwrap();
         let block = enc.into_compressed();
 
         let output = Decoder::decode(&block).unwrap();
@@ -339,9 +339,9 @@ mod tests {
 
         let mut enc = Encoder::new();
         for dp in &input {
-            enc.encode(*dp);
+            enc.encode(*dp).unwrap();
         }
-        enc.finish();
+        enc.finish().unwrap();
         let block = enc.into_compressed();
 
         let output = Decoder::decode(&block).unwrap();
@@ -352,8 +352,8 @@ mod tests {
     fn test_roundtrip_single() {
         let input = vec![DataPoint::new(12345, 99.99)];
         let mut enc = Encoder::new();
-        enc.encode(input[0]);
-        enc.finish();
+        enc.encode(input[0]).unwrap();
+        enc.finish().unwrap();
         let block = enc.into_compressed();
         let output = Decoder::decode(&block).unwrap();
         assert_eq!(input, output);
@@ -369,9 +369,9 @@ mod tests {
 
         let mut enc = Encoder::new();
         for dp in &input {
-            enc.encode(*dp);
+            enc.encode(*dp).unwrap();
         }
-        enc.finish();
+        enc.finish().unwrap();
         let block = enc.into_compressed();
 
         let output: Vec<DataPoint> = Decoder::iter(&block)

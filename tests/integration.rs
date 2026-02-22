@@ -4,9 +4,9 @@ use gorilla::{DataPoint, Decoder, Encoder};
 fn roundtrip(input: &[DataPoint]) -> Vec<DataPoint> {
     let mut enc = Encoder::new();
     for dp in input {
-        enc.encode(*dp);
+        enc.encode(*dp).unwrap();
     }
-    enc.finish();
+    enc.finish().unwrap();
     let block = enc.into_compressed();
     Decoder::decode(&block).expect("decode failed")
 }
@@ -14,7 +14,7 @@ fn roundtrip(input: &[DataPoint]) -> Vec<DataPoint> {
 #[test]
 fn test_empty_stream() {
     let mut enc = Encoder::new();
-    enc.finish();
+    enc.finish().unwrap();
     let block = enc.into_compressed();
     // The stream has no actual data points (only the end marker).
     // Decoding should return an error (empty) since there's no header.
@@ -144,9 +144,9 @@ fn test_compression_ratio_identical_values() {
 
     let mut enc = Encoder::new();
     for dp in &input {
-        enc.encode(*dp);
+        enc.encode(*dp).unwrap();
     }
-    enc.finish();
+    enc.finish().unwrap();
     let block = enc.into_compressed();
 
     let uncompressed_bytes = input.len() * 16;
@@ -172,9 +172,9 @@ fn test_compression_ratio_varying_values() {
 
     let mut enc = Encoder::new();
     for dp in &input {
-        enc.encode(*dp);
+        enc.encode(*dp).unwrap();
     }
-    enc.finish();
+    enc.finish().unwrap();
     let block = enc.into_compressed();
 
     let uncompressed_bytes = input.len() * 16;
@@ -199,9 +199,9 @@ fn test_iterator_matches_decode() {
 
     let mut enc = Encoder::new();
     for dp in &input {
-        enc.encode(*dp);
+        enc.encode(*dp).unwrap();
     }
-    enc.finish();
+    enc.finish().unwrap();
     let block = enc.into_compressed();
 
     let decoded = Decoder::decode(&block).unwrap();

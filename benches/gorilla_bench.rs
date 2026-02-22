@@ -30,9 +30,9 @@ fn bench_encode(c: &mut Criterion) {
             b.iter(|| {
                 let mut enc = Encoder::new();
                 for dp in data {
-                    enc.encode(black_box(*dp));
+                    enc.encode(black_box(*dp)).unwrap();
                 }
-                enc.finish();
+                enc.finish().unwrap();
                 black_box(enc.into_compressed())
             });
         });
@@ -46,9 +46,9 @@ fn bench_encode(c: &mut Criterion) {
             b.iter(|| {
                 let mut enc = Encoder::new();
                 for dp in data {
-                    enc.encode(black_box(*dp));
+                    enc.encode(black_box(*dp)).unwrap();
                 }
-                enc.finish();
+                enc.finish().unwrap();
                 black_box(enc.into_compressed())
             });
         });
@@ -64,9 +64,9 @@ fn bench_decode(c: &mut Criterion) {
         let data = generate_data(size);
         let mut enc = Encoder::new();
         for dp in &data {
-            enc.encode(*dp);
+            enc.encode(*dp).unwrap();
         }
-        enc.finish();
+        enc.finish().unwrap();
         let block = enc.into_compressed();
 
         group.throughput(Throughput::Elements(size as u64));
@@ -83,9 +83,9 @@ fn bench_decode(c: &mut Criterion) {
         let data = generate_constant_data(size);
         let mut enc = Encoder::new();
         for dp in &data {
-            enc.encode(*dp);
+            enc.encode(*dp).unwrap();
         }
-        enc.finish();
+        enc.finish().unwrap();
         let block = enc.into_compressed();
 
         group.throughput(Throughput::Elements(size as u64));
@@ -108,9 +108,9 @@ fn bench_decode_iter(c: &mut Criterion) {
         let data = generate_data(size);
         let mut enc = Encoder::new();
         for dp in &data {
-            enc.encode(*dp);
+            enc.encode(*dp).unwrap();
         }
-        enc.finish();
+        enc.finish().unwrap();
         let block = enc.into_compressed();
 
         group.throughput(Throughput::Elements(size as u64));
@@ -137,9 +137,9 @@ fn bench_roundtrip(c: &mut Criterion) {
             b.iter(|| {
                 let mut enc = Encoder::new();
                 for dp in data {
-                    enc.encode(black_box(*dp));
+                    enc.encode(black_box(*dp)).unwrap();
                 }
-                enc.finish();
+                enc.finish().unwrap();
                 let block = enc.into_compressed();
                 let points = Decoder::decode(&block).unwrap();
                 black_box(points)
